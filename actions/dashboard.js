@@ -6,6 +6,7 @@ import { request } from "@arcjet/next";
 import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 
+// Serialize Prisma Decimal values to numbers
 const serializeTransaction = (obj) => {
   const serialized = { ...obj };
   if (obj.balance) serialized.balance = obj.balance.toNumber();
@@ -13,6 +14,7 @@ const serializeTransaction = (obj) => {
   return serialized;
 };
 
+// Get all user accounts
 export async function getUserAccounts() {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthorized");
@@ -24,6 +26,7 @@ export async function getUserAccounts() {
   if (!user) {
     const { clerkClient } = await import("@clerk/nextjs/server");
     const clerkUser = await clerkClient.users.getUser(userId);
+
     user = await db.user.create({
       data: {
         clerkUserId: userId,
@@ -37,48 +40,72 @@ export async function getUserAccounts() {
     const accounts = await db.account.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: "desc" },
-      include: { _count: { select: { transactions: true } } },
+      include: {
+        _count: { select: { transactions: true } },
+      },
     });
 
     return accounts.map(serializeTransaction);
   } catch (error) {
     console.error(error.message);
-    return []; // Ensure function always returns something
+    return [];
   }
 }
 
+// Create a new account
 export async function createAccount(data) {
   try {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
 
     const req = await request();
-    const decision = await aj.protect(req, { userId, requested: 1 });
+
+    const decision = await aj.protect(req, {
+      userId,
+      requested: 1,
+    });
 
     if (decision.isDenied()) {
       if (decision.reason.isRateLimit()) {
         const { remaining, reset } = decision.reason;
-        console.error({ code: "RATE_LIMIT_EXCEEDED", details: { remaining, resetInSeconds: reset } });
+        console.error({
+          code: "RATE_LIMIT_EXCEEDED",
+          details: { remaining, resetInSeconds: reset },
+        });
         throw new Error("Too many requests. Please try again later.");
       }
       throw new Error("Request blocked");
     }
 
-    const user = await db.user.findUnique({ where: { clerkUserId: userId } });
+    const user = await db.user.findUnique({
+      where: { clerkUserId: userId },
+    });
+
     if (!user) throw new Error("User not found");
 
     const balanceFloat = parseFloat(data.balance);
     if (isNaN(balanceFloat)) throw new Error("Invalid balance amount");
 
-    const existingAccounts = await db.account.findMany({ where: { userId: user.id } });
+    const existingAccounts = await db.account.findMany({
+      where: { userId: user.id },
+    });
+
     const shouldBeDefault = existingAccounts.length === 0 ? true : data.isDefault;
 
     if (shouldBeDefault) {
-      await db.account.updateMany({ where: { userId: user.id, isDefault: true }, data: { isDefault: false } });
+      await db.account.updateMany({
+        where: { userId: user.id, isDefault: true },
+        data: { isDefault: false },
+      });
     }
 
     const account = await db.account.create({
-      data: { ...data, balance: balanceFloat, userId: user.id, isDefault: shouldBeDefault },
+      data: {
+        ...data,
+        balance: balanceFloat,
+        userId: user.id,
+        isDefault: shouldBeDefault,
+      },
     });
 
     revalidatePath("/dashboard");
@@ -88,13 +115,21 @@ export async function createAccount(data) {
   }
 }
 
+// Get all transactions for dashboard
 export async function getDashboardData() {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthorized");
 
-  const user = await db.user.findUnique({ where: { clerkUserId: userId } });
+  const user = await db.user.findUnique({
+    where: { clerkUserId: userId },
+  });
+
   if (!user) throw new Error("User not found");
 
-  const transactions = await db.transaction.findMany({ where: { userId: user.id }, orderBy: { date: "desc" } });
+  const transactions = await db.transaction.findMany({
+    where: { userId: user.id },
+    orderBy: { date: "desc" },
+  });
+
   return transactions.map(serializeTransaction);
 }

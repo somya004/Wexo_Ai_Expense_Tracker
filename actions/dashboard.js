@@ -3,29 +3,27 @@
 import aj from "@/lib/arcjet";
 import { db } from "@/lib/prisma";
 import { request } from "@arcjet/next";
-import { auth, clerkClient } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 
-// Safe serialization
 const serializeTransaction = (obj) => {
-  return {
-    ...obj,
-    balance: obj.balance ? Number(obj.balance) : 0,
-    amount: obj.amount ? Number(obj.amount) : 0,
-  };
+  const serialized = { ...obj };
+  if (obj.balance) serialized.balance = obj.balance.toNumber();
+  if (obj.amount) serialized.amount = obj.amount.toNumber();
+  return serialized;
 };
 
 export async function getUserAccounts() {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthorized");
 
-  // Check if user exists
-  let user = await db.user.findUnique({ where: { clerkUserId: userId } });
+  let user = await db.user.findUnique({
+    where: { clerkUserId: userId },
+  });
 
-  // Auto-create user if missing
   if (!user) {
+    const { clerkClient } = await import("@clerk/nextjs/server");
     const clerkUser = await clerkClient.users.getUser(userId);
-
     user = await db.user.create({
       data: {
         clerkUserId: userId,
@@ -45,7 +43,7 @@ export async function getUserAccounts() {
     return accounts.map(serializeTransaction);
   } catch (error) {
     console.error(error.message);
-    return [];
+    return []; // Ensure function always returns something
   }
 }
 
@@ -97,10 +95,6 @@ export async function getDashboardData() {
   const user = await db.user.findUnique({ where: { clerkUserId: userId } });
   if (!user) throw new Error("User not found");
 
-  const transactions = await db.transaction.findMany({
-    where: { userId: user.id },
-    orderBy: { date: "desc" },
-  });
-
+  const transactions = await db.transaction.findMany({ where: { userId: user.id }, orderBy: { date: "desc" } });
   return transactions.map(serializeTransaction);
 }
